@@ -653,6 +653,49 @@
   color: var(--accent);
 }
 
+.claim-email-modal {
+  width: min(440px, 100%);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claim-email-modal h3 {
+  margin: 0 32px 0 0;
+  color: var(--text-h);
+}
+
+.claim-email-modal p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.claim-email-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.claim-email-modal__form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.claim-email-modal__form input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text-h);
+  font: inherit;
+}
+
 .claim-manager {
   width: min(440px, 100%);
   padding: 20px;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import Logo from '../components/Logo'
+import Modal from '../components/Modal'
 import PublicGiftCard from '../components/PublicGiftCard'
 import { GiftIcon, SparkleIcon, SpinnerIcon } from '../components/Icons'
 import { sortGifts, sortGiftsByPrice } from '../sortGifts'
@@ -130,6 +131,11 @@ function PublicWishlistPage({ appName }) {
   const [sortBy, setSortBy] = useState('recommended')
   const [labelFilters, setLabelFilters] = useState([])
   const [brandFilters, setBrandFilters] = useState([])
+  const [claimDialog, setClaimDialog] = useState(null)
+  const [claimEmail, setClaimEmail] = useState('')
+  const [claimDialogError, setClaimDialogError] = useState(null)
+  const [claimDialogPending, setClaimDialogPending] = useState(false)
+  const claimEmailInputRef = useRef(null)
 
   function toggleFilter(setFilters, value) {
     setFilters((current) => (current.includes(value) ? current.filter((v) => v !== value) : [...current, value]))
@@ -174,17 +180,41 @@ function PublicWishlistPage({ appName }) {
     return `wilik-claim-${giftId}`
   }
 
+  function openClaimDialog(gift, action) {
+    setClaimEmail('')
+    setClaimDialogError(null)
+    setClaimDialogPending(false)
+    setClaimDialog({ gift, action })
+  }
+
+  function closeClaimDialog() {
+    if (claimDialogPending) return
+    setClaimDialog(null)
+    setClaimDialogError(null)
+  }
+
   function handleClaim(gift) {
-    const email = prompt(t('Your email address:'))
-    if (!email || !email.trim()) return
-    postAction(gift.id, 'claim', { email: email.trim() })
-      .then((updated) => {
-        if (updated.claim_token) {
-          localStorage.setItem(claimTokenKey(gift.id), updated.claim_token)
+    openClaimDialog(gift, 'claim')
+  }
+
+  function handleClaimDialogSubmit(event) {
+    event.preventDefault()
+    if (!claimDialog || claimDialogPending) return
+
+    setClaimDialogPending(true)
+    setClaimDialogError(null)
+    const action = claimDialog.action === 'claim' ? 'claim' : 'verify-claim'
+    postAction(claimDialog.gift.id, action, { email: claimEmail.trim() })
+      .then((result) => {
+        if (result.claim_token) {
+          localStorage.setItem(claimTokenKey(claimDialog.gift.id), result.claim_token)
         }
-        updateItem(updated)
+        if (claimDialog.action === 'claim') updateItem(result)
+        else updateItem({ ...claimDialog.gift })
+        setClaimDialog(null)
       })
-      .catch((error) => alert(error.message))
+      .catch((error) => setClaimDialogError(error.message))
+      .finally(() => setClaimDialogPending(false))
   }
 
   function handleUnclaim(gift) {
@@ -199,18 +229,9 @@ function PublicWishlistPage({ appName }) {
       return
     }
 
-    // no token on this device: confirm the email first, but only recognize this
-    // browser as the claimant -- an actual release still needs a second, explicit click
-    const email = prompt(t('Confirm your email address to manage this claim:'))
-    if (!email || !email.trim()) return
-    postAction(gift.id, 'verify-claim', { email: email.trim() })
-      .then((data) => {
-        if (data.claim_token) {
-          localStorage.setItem(claimTokenKey(gift.id), data.claim_token)
-        }
-        updateItem({ ...gift })
-      })
-      .catch((error) => alert(error.message))
+    // Confirming the email only recognizes this browser as the claimant;
+    // an actual release still needs a second, explicit click.
+    openClaimDialog(gift, 'verify')
   }
 
   // used at quantity > 1 (or unlimited) via the "manage your claim" link: recognizes an
@@ -218,16 +239,7 @@ function PublicWishlistPage({ appName }) {
   // already claimed a copy on another device can find their way back to "Release this
   // gift" instead of accidentally claiming an extra, separate copy
   function handleManageClaim(gift) {
-    const email = prompt(t('Confirm your email address to manage your claim:'))
-    if (!email || !email.trim()) return
-    postAction(gift.id, 'verify-claim', { email: email.trim() })
-      .then((data) => {
-        if (data.claim_token) {
-          localStorage.setItem(claimTokenKey(gift.id), data.claim_token)
-        }
-        updateItem({ ...gift })
-      })
-      .catch((error) => alert(error.message))
+    openClaimDialog(gift, 'verify')
   }
 
   if (owner === undefined) return null
@@ -377,6 +389,50 @@ function PublicWishlistPage({ appName }) {
           ))}
         </div>
       </main>
+      <Modal
+        open={claimDialog !== null}
+        onClose={closeClaimDialog}
+        closeDisabled={claimDialogPending}
+        initialFocusRef={claimEmailInputRef}
+        focusKey={claimDialog ? `${claimDialog.action}-${claimDialog.gift.id}` : ''}
+        titleId="claim-email-modal-title"
+        className="claim-email-modal"
+      >
+        {claimDialog && (
+          <>
+            <h3 id="claim-email-modal-title">
+              {t(claimDialog.action === 'claim' ? 'Claim this gift' : 'Manage your claim')}
+            </h3>
+            <p>{t('Your email address is only used to manage this claim. No email will be sent.')}</p>
+            <form className="claim-email-modal__form" onSubmit={handleClaimDialogSubmit}>
+              <label>
+                {t('Email address')}
+                <input
+                  ref={claimEmailInputRef}
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  maxLength={255}
+                  required
+                  value={claimEmail}
+                  onChange={(event) => setClaimEmail(event.target.value)}
+                />
+              </label>
+              {claimDialogError && <p className="form-error">{claimDialogError}</p>}
+              <div className="gift-form__actions">
+                <button type="button" onClick={closeClaimDialog} disabled={claimDialogPending}>
+                  {t('Cancel')}
+                </button>
+                <button type="submit" className="btn-primary" disabled={claimDialogPending}>
+                  {claimDialogPending
+                    ? t('Loading…')
+                    : t(claimDialog.action === 'claim' ? 'Claim' : 'Continue')}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+      </Modal>
     </div>
   )
 }
