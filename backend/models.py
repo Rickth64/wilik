@@ -166,8 +166,8 @@ class Gift(db.Model):
     # owner-controlled "I got this" flag: pulls the item off their own active list into the received archive
     received = db.Column(db.Boolean, nullable=False, default=False)
 
-    # one row per visitor who has claimed a "copy" of this gift. Owner responses only
-    # include claim status when that wishlist explicitly enables claim management.
+    # one row per claim token; claimed_quantity can represent multiple copies.
+    # Owner responses only include claim status when claim management is enabled.
     claims = db.relationship("Claim", backref="gift", cascade="all, delete-orphan", lazy="selectin")
 
     def to_dict(self, include_claim_status=False):
@@ -188,13 +188,17 @@ class Gift(db.Model):
             "sort_order": self.sort_order,
         }
         if include_claim_status:
-            claimed_count = len(self.claims)
+            claimed_count = sum(claim.claimed_quantity for claim in self.claims)
             data["claimed_count"] = claimed_count
             data["fully_claimed"] = self.quantity is not None and claimed_count >= self.quantity
         return data
 
 
 class Claim(db.Model):
+    __table_args__ = (
+        db.UniqueConstraint("gift_id", "claimed_email", name="uq_claim_gift_claimed_email"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     gift_id = db.Column(db.Integer, db.ForeignKey("gift.id"), nullable=False)
     # never sent to public visitors. It is returned to an authenticated item owner only
@@ -202,4 +206,5 @@ class Claim(db.Model):
     claimed_email = db.Column(db.String(255), nullable=False)
     # secret handed to the claimer's own browser so they can unclaim silently, without retyping their email
     claim_token = db.Column(db.String(64), nullable=False, unique=True)
+    claimed_quantity = db.Column(db.Integer, nullable=False, default=1)
     purchased = db.Column(db.Boolean, nullable=False, default=False)

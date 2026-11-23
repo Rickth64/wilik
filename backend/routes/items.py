@@ -144,7 +144,7 @@ def item_claim_info(item_id):
     gift = db.get_or_404(Gift, item_id)
     if gift.owner_id != current_user.id:
         return jsonify({"error": "Not your item"}), 403
-    return jsonify({"claimed_count": len(gift.claims)})
+    return jsonify({"claimed_count": sum(claim.claimed_quantity for claim in gift.claims)})
 
 
 @items_bp.route("/items/<int:item_id>/claims", methods=["GET"])
@@ -160,7 +160,14 @@ def item_claims(item_id):
     gift = db.get_or_404(Gift, item_id)
     if gift.owner_id != current_user.id:
         return jsonify({"error": "Not your item"}), 403
-    return jsonify({"claimed_emails": [claim.claimed_email for claim in gift.claims]})
+    return jsonify(
+        {
+            "claims": [
+                {"email": claim.claimed_email, "quantity": claim.claimed_quantity}
+                for claim in gift.claims
+            ]
+        }
+    )
 
 
 @items_bp.route("/items/<int:item_id>/claims", methods=["DELETE"])

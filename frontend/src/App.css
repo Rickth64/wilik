@@ -469,6 +469,17 @@
   color: var(--text-h);
 }
 
+.gift-card__body .gift-card__quantity,
+.gift-card__body .gift-card__claim-status {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
+.gift-card__body .gift-card__claim-status {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .gift-card__title-tail {
   white-space: nowrap;
 }

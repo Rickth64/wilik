@@ -13,20 +13,20 @@ function PublicGiftCard({ gift, currency, decimalSeparator, showBackgroundPatter
   const claimedCount = gift.claimed_count ?? 0
   const fullyClaimed = Boolean(gift.fully_claimed)
   const isOwnClaim = claimedCount > 0 && Boolean(localStorage.getItem(`wilik-claim-${gift.id}`))
+  const canClaimMore = gift.quantity == null || claimedCount < gift.quantity
 
   const classNames = ['gift-card']
   if (gift.url) classNames.push('gift-card--clickable')
   if (fullyClaimed) classNames.push('gift-card--fully-claimed')
   if (showBackgroundPattern) classNames.push('gift-card--pattern')
 
-  // "Claim" and "release a claim by email" are two deliberately distinct actions (even at
-  // quantity=1, where the single button already does both depending on state) so that a
-  // typo while trying to release a claim can never silently create an unwanted extra one.
+  // Claiming and releasing stay distinct actions so that a typo while trying to
+  // release a claim can never silently create an unwanted extra one.
   let icon, visibleText, tooltip, clickable, handleClick
   if (isOwnClaim) {
     icon = <UndoIcon />
-    visibleText = t('Release this gift')
-    tooltip = t('Release this gift')
+    visibleText = t('Release claimed copies')
+    tooltip = t('Release claimed copies')
     clickable = true
     handleClick = () => onUnclaim(gift)
   } else if (gift.quantity === 1) {
@@ -96,6 +96,21 @@ function PublicGiftCard({ gift, currency, decimalSeparator, showBackgroundPatter
               {gift.url && <ExternalLinkIcon className="gift-card__link-icon" />}
             </span>
           </h3>
+          <p className="gift-card__quantity">
+            {gift.quantity == null ? t('Wanted: unlimited') : t('Wanted: {count}', { count: gift.quantity })}
+          </p>
+          {claimedCount > 0 && (
+            <p className="gift-card__claim-status">
+              {gift.quantity == null
+                ? t('{count} copies are already claimed', { count: claimedCount })
+                : fullyClaimed
+                  ? t('All {count} wanted copies are already claimed', { count: gift.quantity })
+                  : t('{claimed} of {total} wanted copies are already claimed', {
+                      claimed: claimedCount,
+                      total: gift.quantity,
+                    })}
+            </p>
+          )}
           {gift.options && (
             <span className="gift-card__options">
               {gift.options
@@ -152,6 +167,18 @@ function PublicGiftCard({ gift, currency, decimalSeparator, showBackgroundPatter
           }}
         >
           {t('Already claimed this? Manage your claim')}
+        </button>
+      )}
+      {isOwnClaim && canClaimMore && (
+        <button
+          type="button"
+          className="gift-card__manage-claim"
+          onClick={(event) => {
+            event.stopPropagation()
+            onClaim(gift)
+          }}
+        >
+          {t('Claim more copies')}
         </button>
       )}
     </div>

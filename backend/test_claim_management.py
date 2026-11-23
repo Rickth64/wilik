@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from flask import Flask, jsonify
 from flask_login import LoginManager
 from flask_migrate import Migrate, downgrade, upgrade
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from models import AppSettings, Claim, Gift, User, db
 from routes.items import items_bp
@@ -90,7 +90,10 @@ class ClaimManagementTestCase(unittest.TestCase):
         # the owner can still deliberately reveal a name once, e.g. right before deleting
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
+        self.assertEqual(
+            reveal_response.get_json(),
+            {"claims": [{"email": "alice@example.com", "quantity": 1}]},
+        )
 
         # resetting claims still requires the full per-wishlist opt-in
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
@@ -105,7 +108,10 @@ class ClaimManagementTestCase(unittest.TestCase):
 
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
+        self.assertEqual(
+            reveal_response.get_json(),
+            {"claims": [{"email": "alice@example.com", "quantity": 1}]},
+        )
         self.assertNotIn("secret-token", reveal_response.get_data(as_text=True))
 
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
@@ -137,7 +143,10 @@ class ClaimManagementTestCase(unittest.TestCase):
         # claim management fully off site-wide -- only the passive surface is gated
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
+        self.assertEqual(
+            reveal_response.get_json(),
+            {"claims": [{"email": "alice@example.com", "quantity": 1}]},
+        )
 
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reset_response.status_code, 403)
@@ -211,7 +220,129 @@ class ClaimManagementTestCase(unittest.TestCase):
             json={"email": "MIXED.CASE@EXAMPLE.COM"},
         )
         self.assertEqual(verify_response.status_code, 200)
-        self.assertEqual(verify_response.get_json(), {"claim_token": new_claim.claim_token})
+        self.assertEqual(
+            verify_response.get_json(),
+            {"claim_token": new_claim.claim_token, "claim_quantity": 1},
+        )
+
+    def test_public_claim_and_unclaim_use_requested_quantities(self):
+        with self.app.app_context():
+            gift = db.session.get(Gift, self.gift_id)
+            gift.quantity = 5
+            for claim in list(gift.claims):
+                db.session.delete(claim)
+            db.session.commit()
+
+        claim_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "alice@example.com", "quantity": 3},
+        )
+        self.assertEqual(claim_response.status_code, 200)
+        claim_data = claim_response.get_json()
+        self.assertEqual(claim_data["claimed_count"], 3)
+        self.assertEqual(claim_data["claim_quantity"], 3)
+
+        release_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/unclaim",
+            json={"claim_token": claim_data["claim_token"], "quantity": 2},
+        )
+        self.assertEqual(release_response.status_code, 200)
+        release_data = release_response.get_json()
+        self.assertEqual(release_data["claimed_count"], 1)
+        self.assertEqual(release_data["claim_quantity"], 1)
+
+        too_many_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/unclaim",
+            json={"claim_token": claim_data["claim_token"], "quantity": 2},
+        )
+        self.assertEqual(too_many_response.status_code, 400)
+
+        final_release_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/unclaim",
+            json={"claim_token": claim_data["claim_token"], "quantity": 1},
+        )
+        self.assertEqual(final_release_response.status_code, 200)
+        self.assertEqual(final_release_response.get_json()["claimed_count"], 0)
+
+    def test_public_claim_rejects_invalid_quantity_and_prevents_overclaiming(self):
+        with self.app.app_context():
+            gift = db.session.get(Gift, self.gift_id)
+            gift.quantity = 5
+            db.session.get(Claim, 1).claimed_quantity = 4
+            db.session.commit()
+
+        invalid_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "alice@example.com", "quantity": 0},
+        )
+        self.assertEqual(invalid_response.status_code, 400)
+
+        overclaim_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "bob@example.com", "quantity": 2},
+        )
+        self.assertEqual(overclaim_response.status_code, 409)
+
+        with self.app.app_context():
+            self.assertEqual(db.session.get(Gift, self.gift_id).to_dict(True)["claimed_count"], 4)
+
+    def test_claims_for_same_email_accumulate_and_verify_together(self):
+        with self.app.app_context():
+            gift = db.session.get(Gift, self.gift_id)
+            gift.quantity = None
+            db.session.commit()
+
+        first_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "Alice@example.com", "quantity": 2},
+        )
+        self.assertEqual(first_response.status_code, 200)
+        first_claim = first_response.get_json()
+
+        second_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "alice@EXAMPLE.com", "quantity": 2},
+        )
+        self.assertEqual(second_response.status_code, 200)
+        second_claim = second_response.get_json()
+        self.assertEqual(second_claim["claimed_count"], 5)
+        self.assertEqual(second_claim["claim_quantity"], 5)
+        self.assertEqual(second_claim["claim_token"], first_claim["claim_token"])
+
+        token_claim_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"claim_token": second_claim["claim_token"], "quantity": 1},
+        )
+        self.assertEqual(token_claim_response.status_code, 200)
+        token_claim = token_claim_response.get_json()
+        self.assertEqual(token_claim["claimed_count"], 6)
+        self.assertEqual(token_claim["claim_quantity"], 6)
+
+        verify_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/verify-claim",
+            json={"email": "ALICE@example.com"},
+        )
+        self.assertEqual(verify_response.status_code, 200)
+        self.assertEqual(verify_response.get_json()["claim_quantity"], 6)
+
+        token_verify_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/verify-claim",
+            json={"claim_token": token_claim["claim_token"]},
+        )
+        self.assertEqual(token_verify_response.status_code, 200)
+        self.assertEqual(token_verify_response.get_json()["claim_quantity"], 6)
+
+        stale_token_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/verify-claim",
+            json={"claim_token": "stale-token"},
+        )
+        self.assertEqual(stale_token_response.status_code, 403)
+        self.assertEqual(stale_token_response.get_json(), {"error": "Claim token not found"})
+
+        with self.app.app_context():
+            claims = Claim.query.filter_by(gift_id=self.gift_id).all()
+            self.assertEqual(len(claims), 1)
+            self.assertEqual(claims[0].claimed_quantity, 6)
 
 
 class ClaimManagementMigrationTestCase(unittest.TestCase):
@@ -276,6 +407,72 @@ class ClaimManagementSiteToggleMigrationTestCase(unittest.TestCase):
                 downgrade(directory=migrations_directory, revision="e5f6a7b8c9d0")
                 columns_downgraded = {column["name"] for column in inspect(db.engine).get_columns("app_settings")}
                 self.assertNotIn("claim_management_site_enabled", columns_downgraded)
+                db.session.remove()
+                db.engine.dispose()
+
+
+class ClaimAggregationMigrationTestCase(unittest.TestCase):
+    def test_upgrade_adds_quantity_merges_duplicate_claims_and_can_be_downgraded(self):
+        migrations_directory = str(Path(__file__).parent / "migrations")
+
+        with TemporaryDirectory() as temporary_directory:
+            database_path = Path(temporary_directory) / "migration-test.db"
+            app = Flask(__name__)
+            app.config.update(
+                SQLALCHEMY_DATABASE_URI=f"sqlite:///{database_path.as_posix()}",
+                TESTING=True,
+            )
+            db.init_app(app)
+            Migrate(app, db, directory=migrations_directory)
+
+            with app.app_context():
+                upgrade(directory=migrations_directory, revision="g7b8c9d0e1f2")
+                owner = User(username="merge-owner")
+                db.session.add(owner)
+                db.session.flush()
+                gift = Gift(owner_id=owner.id, title="Merge gift", quantity=10)
+                db.session.add(gift)
+                db.session.flush()
+                for token, email in [
+                    ("first-token", "Alice@Example.com"),
+                    ("second-token", "alice@example.com"),
+                ]:
+                    db.session.execute(
+                        text(
+                            "INSERT INTO claim (gift_id, claimed_email, claim_token, purchased) "
+                            "VALUES (:gift_id, :email, :token, 0)"
+                        ),
+                        {"gift_id": gift.id, "email": email, "token": token},
+                    )
+                db.session.commit()
+
+                upgrade(directory=migrations_directory, revision="head")
+                columns = {column["name"] for column in inspect(db.engine).get_columns("claim")}
+                self.assertIn("claimed_quantity", columns)
+                claims = db.session.execute(
+                    text(
+                        "SELECT claim_token, claimed_email, claimed_quantity "
+                        "FROM claim WHERE gift_id = :gift_id"
+                    ),
+                    {"gift_id": gift.id},
+                ).all()
+                self.assertEqual(claims, [("first-token", "alice@example.com", 2)])
+                unique_indexes = [
+                    index
+                    for index in inspect(db.engine).get_indexes("claim")
+                    if index["name"] == "uq_claim_gift_claimed_email" and index["unique"]
+                ]
+                self.assertEqual(len(unique_indexes), 1)
+
+                downgrade(directory=migrations_directory, revision="g7b8c9d0e1f2")
+                downgraded_columns = {
+                    column["name"] for column in inspect(db.engine).get_columns("claim")
+                }
+                self.assertNotIn("claimed_quantity", downgraded_columns)
+                self.assertNotIn(
+                    "uq_claim_gift_claimed_email",
+                    {index["name"] for index in inspect(db.engine).get_indexes("claim")},
+                )
                 db.session.remove()
                 db.engine.dispose()
 

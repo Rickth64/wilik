@@ -133,6 +133,7 @@ function PublicWishlistPage({ appName }) {
   const [brandFilters, setBrandFilters] = useState([])
   const [claimDialog, setClaimDialog] = useState(null)
   const [claimEmail, setClaimEmail] = useState('')
+  const [claimAmount, setClaimAmount] = useState('')
   const [claimDialogError, setClaimDialogError] = useState(null)
   const [claimDialogPending, setClaimDialogPending] = useState(false)
   const claimEmailInputRef = useRef(null)
@@ -170,7 +171,11 @@ function PublicWishlistPage({ appName }) {
       body: JSON.stringify(body ?? {}),
     }).then((response) =>
       response.json().then((data) => {
-        if (!response.ok) throw new Error(t(data.error || 'Something went wrong'))
+        if (!response.ok) {
+          const error = new Error(t(data.error || 'Something went wrong'))
+          error.code = data.error
+          throw error
+        }
         return data
       })
     )
@@ -180,11 +185,16 @@ function PublicWishlistPage({ appName }) {
     return `wilik-claim-${giftId}`
   }
 
-  function openClaimDialog(gift, action) {
+  function claimQuantityKey(giftId) {
+    return `wilik-claim-quantity-${giftId}`
+  }
+
+  function openClaimDialog(gift, action, options = {}) {
     setClaimEmail('')
+    setClaimAmount('')
     setClaimDialogError(null)
     setClaimDialogPending(false)
-    setClaimDialog({ gift, action })
+    setClaimDialog({ gift, action, ...options })
   }
 
   function closeClaimDialog() {
@@ -194,7 +204,8 @@ function PublicWishlistPage({ appName }) {
   }
 
   function handleClaim(gift) {
-    openClaimDialog(gift, 'claim')
+    const claimToken = localStorage.getItem(claimTokenKey(gift.id))
+    openClaimDialog(gift, 'claim', claimToken ? { claimToken } : {})
   }
 
   function handleClaimDialogSubmit(event) {
@@ -203,29 +214,74 @@ function PublicWishlistPage({ appName }) {
 
     setClaimDialogPending(true)
     setClaimDialogError(null)
-    const action = claimDialog.action === 'claim' ? 'claim' : 'verify-claim'
-    postAction(claimDialog.gift.id, action, { email: claimEmail.trim() })
+    const requestAction =
+      claimDialog.action === 'claim' ? 'claim' : claimDialog.action === 'unclaim' ? 'unclaim' : 'verify-claim'
+    const requestBody =
+      claimDialog.action === 'claim'
+        ? claimDialog.claimToken
+          ? { claim_token: claimDialog.claimToken, quantity: Number(claimAmount) }
+          : { email: claimEmail.trim(), quantity: Number(claimAmount) }
+        : claimDialog.action === 'unclaim'
+          ? { claim_token: claimDialog.claimToken, quantity: Number(claimAmount) }
+          : { email: claimEmail.trim() }
+    postAction(claimDialog.gift.id, requestAction, requestBody)
       .then((result) => {
         if (result.claim_token) {
           localStorage.setItem(claimTokenKey(claimDialog.gift.id), result.claim_token)
+          localStorage.setItem(claimQuantityKey(claimDialog.gift.id), String(result.claim_quantity || 1))
         }
-        if (claimDialog.action === 'claim') updateItem(result)
+        if (claimDialog.action === 'unclaim') {
+          if (result.claim_quantity > 0) {
+            localStorage.setItem(claimQuantityKey(claimDialog.gift.id), String(result.claim_quantity))
+          } else {
+            localStorage.removeItem(claimTokenKey(claimDialog.gift.id))
+            localStorage.removeItem(claimQuantityKey(claimDialog.gift.id))
+          }
+        }
+        if (claimDialog.action === 'claim' || claimDialog.action === 'unclaim') updateItem(result)
         else updateItem({ ...claimDialog.gift })
         setClaimDialog(null)
       })
-      .catch((error) => setClaimDialogError(error.message))
+      .catch((error) => {
+        if (
+          (claimDialog.action === 'unclaim' || (claimDialog.action === 'claim' && claimDialog.claimToken)) &&
+          error.code === 'Claim token not found'
+        ) {
+          localStorage.removeItem(claimTokenKey(claimDialog.gift.id))
+          localStorage.removeItem(claimQuantityKey(claimDialog.gift.id))
+          setClaimEmail('')
+          setClaimDialog({
+            gift: claimDialog.gift,
+            action: claimDialog.action === 'unclaim' ? 'verify' : 'claim',
+          })
+          setClaimDialogError(null)
+          return
+        }
+        setClaimDialogError(error.message)
+      })
       .finally(() => setClaimDialogPending(false))
   }
 
   function handleUnclaim(gift) {
     const claimToken = localStorage.getItem(claimTokenKey(gift.id))
     if (claimToken) {
-      postAction(gift.id, 'unclaim', { claim_token: claimToken })
-        .then((updated) => {
-          localStorage.removeItem(claimTokenKey(gift.id))
-          updateItem(updated)
+      postAction(gift.id, 'verify-claim', { claim_token: claimToken })
+        .then((claim) => {
+          localStorage.setItem(claimQuantityKey(gift.id), String(claim.claim_quantity))
+          openClaimDialog(gift, 'unclaim', {
+            claimToken,
+            maxQuantity: claim.claim_quantity,
+          })
         })
-        .catch((error) => alert(error.message))
+        .catch((error) => {
+          if (error.code === 'Claim token not found') {
+            localStorage.removeItem(claimTokenKey(gift.id))
+            localStorage.removeItem(claimQuantityKey(gift.id))
+            openClaimDialog(gift, 'verify')
+            return
+          }
+          alert(error.message)
+        })
       return
     }
 
@@ -401,23 +457,56 @@ function PublicWishlistPage({ appName }) {
         {claimDialog && (
           <>
             <h3 id="claim-email-modal-title">
-              {t(claimDialog.action === 'claim' ? 'Claim this gift' : 'Manage your claim')}
+              {t(
+                claimDialog.action === 'claim'
+                  ? claimDialog.claimToken
+                    ? 'Add copies to your claim'
+                    : 'Claim this gift'
+                  : claimDialog.action === 'unclaim'
+                    ? 'Release claimed copies'
+                    : 'Manage your claim'
+              )}
             </h3>
-            <p>{t('Your email address is only used to manage this claim. No email will be sent.')}</p>
+            {claimDialog.action !== 'unclaim' && !claimDialog.claimToken && (
+              <p>{t('Your email address is only used to manage this claim. No email will be sent.')}</p>
+            )}
             <form className="claim-email-modal__form" onSubmit={handleClaimDialogSubmit}>
-              <label>
-                {t('Email address')}
-                <input
-                  ref={claimEmailInputRef}
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  maxLength={255}
-                  required
-                  value={claimEmail}
-                  onChange={(event) => setClaimEmail(event.target.value)}
-                />
-              </label>
+              {claimDialog.action !== 'unclaim' && !claimDialog.claimToken && (
+                <label>
+                  {t('Email address')}
+                  <input
+                    ref={claimEmailInputRef}
+                    type="email"
+                    name="email"
+                    autoComplete="email"
+                    maxLength={255}
+                    required
+                    value={claimEmail}
+                    onChange={(event) => setClaimEmail(event.target.value)}
+                  />
+                </label>
+              )}
+              {claimDialog.action !== 'verify' && (
+                <label>
+                  {t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}
+                  <input
+                    type="number"
+                    name="quantity"
+                    min="1"
+                    max={
+                      claimDialog.action === 'unclaim'
+                        ? claimDialog.maxQuantity
+                        : claimDialog.gift.quantity == null
+                          ? undefined
+                          : Math.max(1, claimDialog.gift.quantity - (claimDialog.gift.claimed_count ?? 0))
+                    }
+                    step="1"
+                    required
+                    value={claimAmount}
+                    onChange={(event) => setClaimAmount(event.target.value)}
+                  />
+                </label>
+              )}
               {claimDialogError && <p className="form-error">{claimDialogError}</p>}
               <div className="gift-form__actions">
                 <button type="button" onClick={closeClaimDialog} disabled={claimDialogPending}>
@@ -426,7 +515,15 @@ function PublicWishlistPage({ appName }) {
                 <button type="submit" className="btn-primary" disabled={claimDialogPending}>
                   {claimDialogPending
                     ? t('Loading…')
-                    : t(claimDialog.action === 'claim' ? 'Claim' : 'Continue')}
+                    : t(
+                        claimDialog.action === 'claim' && claimDialog.claimToken
+                          ? 'Add copies'
+                          : claimDialog.action === 'claim'
+                            ? 'Claim'
+                            : claimDialog.action === 'unclaim'
+                              ? 'Release copies'
+                              : 'Continue'
+                      )}
                 </button>
               </div>
             </form>

@@ -17,6 +17,12 @@ def normalize_claim_email(value):
     return email
 
 
+def parse_claim_quantity(value):
+    if type(value) is not int or value < 1:
+        return None
+    return value
+
+
 @public_bp.route("/public/directory")
 def public_directory():
     # lets visitors find a wishlist without needing its share link -- admin-toggleable
@@ -63,30 +69,51 @@ def claim_item(token, item_id):
     if gift.owner_id != user.id:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json()
-    email = normalize_claim_email(data.get("email"))
-    if email is None:
-        return jsonify({"error": "Enter a valid email address"}), 400
+    claim_token = data.get("claim_token")
+    if claim_token:
+        claim = Claim.query.filter_by(gift_id=gift.id, claim_token=claim_token).first()
+        if claim is None:
+            return jsonify({"error": "Claim token not found"}), 403
+        matching_claims = [claim]
+    else:
+        email = normalize_claim_email(data.get("email"))
+        if email is None:
+            return jsonify({"error": "Enter a valid email address"}), 400
+        matching_claims = Claim.query.filter(
+            Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
+        ).order_by(Claim.id).all()
 
-    # always creates a new, independent claim -- never tries to recognize an existing
-    # email and reuse it, so a typo while trying to *release* a claim (see verify_claim)
-    # can never silently create an unwanted extra claim instead
-    claimed_count = len(gift.claims)
-    if gift.quantity is not None and claimed_count >= gift.quantity:
+    quantity = parse_claim_quantity(data.get("quantity", 1))
+    if quantity is None:
+        return jsonify({"error": "Enter a valid quantity"}), 400
+
+    claimed_count = sum(claim.claimed_quantity for claim in gift.claims)
+    if gift.quantity is not None and claimed_count + quantity > gift.quantity:
         return jsonify({"error": "Already claimed"}), 409
 
-    claim = Claim(gift_id=gift.id, claimed_email=email, claim_token=secrets.token_urlsafe(24))
-    db.session.add(claim)
+    if matching_claims:
+        claim = matching_claims[0]
+        claim.claimed_quantity = sum(item.claimed_quantity for item in matching_claims) + quantity
+        for duplicate in matching_claims[1:]:
+            db.session.delete(duplicate)
+    else:
+        claim = Claim(
+            gift_id=gift.id,
+            claimed_email=email,
+            claim_token=secrets.token_urlsafe(24),
+            claimed_quantity=quantity,
+        )
+        db.session.add(claim)
     db.session.commit()
     result = gift.to_dict(include_claim_status=True)
     result["claim_token"] = claim.claim_token  # only ever returned here, to the claimer themselves
+    result["claim_quantity"] = claim.claimed_quantity
     return jsonify(result)
 
 
 @public_bp.route("/public/<token>/items/<int:item_id>/verify-claim", methods=["POST"])
 def verify_claim(token, item_id):
-    """Confirms an email matches an existing claim without releasing it -- lets a
-    visitor on a different device 'reclaim' their own item before deciding to
-    actually unclaim it, instead of that happening in the same step."""
+    """Confirms a claim token or email without releasing the claim."""
     user = User.query.filter_by(share_token=token).first()
     if user is None:
         return jsonify({"error": "Not found"}), 404
@@ -94,15 +121,21 @@ def verify_claim(token, item_id):
     if gift.owner_id != user.id:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json()
-    email = normalize_claim_email(data.get("email"))
-    if email is None:
-        return jsonify({"error": "Enter a valid email address"}), 400
-    claim = Claim.query.filter(
-        Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
-    ).first()
+    claim_token = data.get("claim_token")
+    if claim_token:
+        claim = Claim.query.filter_by(gift_id=gift.id, claim_token=claim_token).first()
+        if claim is None:
+            return jsonify({"error": "Claim token not found"}), 403
+    else:
+        email = normalize_claim_email(data.get("email"))
+        if email is None:
+            return jsonify({"error": "Enter a valid email address"}), 400
+        claim = Claim.query.filter(
+            Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
+        ).order_by(Claim.id).first()
     if claim is None:
         return jsonify({"error": "That email address doesn't match this claim"}), 403
-    return jsonify({"claim_token": claim.claim_token})
+    return jsonify({"claim_token": claim.claim_token, "claim_quantity": claim.claimed_quantity})
 
 
 @public_bp.route("/public/<token>/items/<int:item_id>/unclaim", methods=["POST"])
@@ -120,6 +153,8 @@ def unclaim_item(token, item_id):
     claim = None
     if claim_token:
         claim = Claim.query.filter_by(gift_id=gift.id, claim_token=claim_token).first()
+        if claim is None and not email:
+            return jsonify({"error": "Claim token not found"}), 403
     if claim is None and email:
         claim = Claim.query.filter(
             Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
@@ -127,9 +162,21 @@ def unclaim_item(token, item_id):
     if claim is None:
         return jsonify({"error": "That email address doesn't match this claim"}), 403
 
-    db.session.delete(claim)
+    quantity = parse_claim_quantity(data.get("quantity", claim.claimed_quantity))
+    if quantity is None:
+        return jsonify({"error": "Enter a valid quantity"}), 400
+    if quantity > claim.claimed_quantity:
+        return jsonify({"error": "You cannot release more than your claimed quantity"}), 400
+
+    remaining_quantity = claim.claimed_quantity - quantity
+    if remaining_quantity == 0:
+        db.session.delete(claim)
+    else:
+        claim.claimed_quantity = remaining_quantity
     db.session.commit()
-    return jsonify(gift.to_dict(include_claim_status=True))
+    result = gift.to_dict(include_claim_status=True)
+    result["claim_quantity"] = remaining_quantity
+    return jsonify(result)
 
 
 @public_bp.route("/public/<token>/items/<int:item_id>/purchased", methods=["POST"])
