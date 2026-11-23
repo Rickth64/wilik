@@ -175,9 +175,9 @@ function PublicWishlistPage({ appName }) {
   }
 
   function handleClaim(gift) {
-    const name = prompt(t("Your name, so others know it's taken:"))
-    if (!name || !name.trim()) return
-    postAction(gift.id, 'claim', { name: name.trim() })
+    const email = prompt(t('Your email address:'))
+    if (!email || !email.trim()) return
+    postAction(gift.id, 'claim', { email: email.trim() })
       .then((updated) => {
         if (updated.claim_token) {
           localStorage.setItem(claimTokenKey(gift.id), updated.claim_token)
@@ -199,11 +199,11 @@ function PublicWishlistPage({ appName }) {
       return
     }
 
-    // no token on this device: confirm the name first, but only recognize this
+    // no token on this device: confirm the email first, but only recognize this
     // browser as the claimant -- an actual release still needs a second, explicit click
-    const name = prompt(t('Confirm your name to manage this claim:'))
-    if (!name || !name.trim()) return
-    postAction(gift.id, 'verify-claim', { name: name.trim() })
+    const email = prompt(t('Confirm your email address to manage this claim:'))
+    if (!email || !email.trim()) return
+    postAction(gift.id, 'verify-claim', { email: email.trim() })
       .then((data) => {
         if (data.claim_token) {
           localStorage.setItem(claimTokenKey(gift.id), data.claim_token)
@@ -214,13 +214,13 @@ function PublicWishlistPage({ appName }) {
   }
 
   // used at quantity > 1 (or unlimited) via the "manage your claim" link: recognizes an
-  // existing claim by name without creating or deleting anything, so a visitor who
+  // existing claim by email without creating or deleting anything, so a visitor who
   // already claimed a copy on another device can find their way back to "Release this
   // gift" instead of accidentally claiming an extra, separate copy
   function handleManageClaim(gift) {
-    const name = prompt(t('Confirm your name to manage your claim:'))
-    if (!name || !name.trim()) return
-    postAction(gift.id, 'verify-claim', { name: name.trim() })
+    const email = prompt(t('Confirm your email address to manage your claim:'))
+    if (!email || !email.trim()) return
+    postAction(gift.id, 'verify-claim', { email: email.trim() })
       .then((data) => {
         if (data.claim_token) {
           localStorage.setItem(claimTokenKey(gift.id), data.claim_token)

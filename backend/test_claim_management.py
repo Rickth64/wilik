@@ -9,6 +9,8 @@ from sqlalchemy import inspect
 
 from models import AppSettings, Claim, Gift, User, db
 from routes.items import items_bp
+from routes.public import public_bp
+from routes.public import public_bp
 
 
 class ClaimManagementTestCase(unittest.TestCase):
@@ -31,6 +33,7 @@ class ClaimManagementTestCase(unittest.TestCase):
             return jsonify({"error": "Login required"}), 401
 
         self.app.register_blueprint(items_bp)
+        self.app.register_blueprint(public_bp)
 
         with self.app.app_context():
             db.create_all()
@@ -42,11 +45,12 @@ class ClaimManagementTestCase(unittest.TestCase):
             gift = Gift(owner_id=owner.id, title="Claimed gift", quantity=1)
             db.session.add(gift)
             db.session.flush()
-            db.session.add(Claim(gift_id=gift.id, claimed_by="Alice", claim_token="secret-token"))
+            db.session.add(Claim(gift_id=gift.id, claimed_email="alice@example.com", claim_token="secret-token"))
             db.session.commit()
             self.owner_id = owner.id
             self.other_id = other.id
             self.gift_id = gift.id
+            self.owner_share_token = owner.share_token
 
         self.client = self.app.test_client()
 
@@ -86,7 +90,7 @@ class ClaimManagementTestCase(unittest.TestCase):
         # the owner can still deliberately reveal a name once, e.g. right before deleting
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_by": ["Alice"]})
+        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
 
         # resetting claims still requires the full per-wishlist opt-in
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
@@ -101,7 +105,7 @@ class ClaimManagementTestCase(unittest.TestCase):
 
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_by": ["Alice"]})
+        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
         self.assertNotIn("secret-token", reveal_response.get_data(as_text=True))
 
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
@@ -133,10 +137,81 @@ class ClaimManagementTestCase(unittest.TestCase):
         # claim management fully off site-wide -- only the passive surface is gated
         reveal_response = self.client.get(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reveal_response.status_code, 200)
-        self.assertEqual(reveal_response.get_json(), {"claimed_by": ["Alice"]})
+        self.assertEqual(reveal_response.get_json(), {"claimed_emails": ["alice@example.com"]})
 
         reset_response = self.client.delete(f"/api/items/{self.gift_id}/claims")
         self.assertEqual(reset_response.status_code, 403)
+
+    def test_public_claim_requires_and_normalizes_email(self):
+        with self.app.app_context():
+            owner = db.session.get(User, self.owner_id)
+            token = owner.share_token
+            gift = db.session.get(Gift, self.gift_id)
+            gift.quantity = None
+            for claim in list(gift.claims):
+                db.session.delete(claim)
+            db.session.commit()
+
+        invalid_response = self.client.post(
+            f"/api/public/{token}/items/{self.gift_id}/claim",
+            json={"email": "not-an-email"},
+        )
+        self.assertEqual(invalid_response.status_code, 400)
+
+        claim_response = self.client.post(
+            f"/api/public/{token}/items/{self.gift_id}/claim",
+            json={"email": "  Alice@Example.COM  "},
+        )
+        self.assertEqual(claim_response.status_code, 200)
+
+        with self.app.app_context():
+            claim = Claim.query.filter_by(gift_id=self.gift_id).order_by(Claim.id.desc()).first()
+            self.assertEqual(claim.claimed_email, "alice@example.com")
+
+    def test_public_claim_rejects_invalid_email_addresses(self):
+        invalid_emails = [
+            "",
+            "not-an-email",
+            "missing-domain@example",
+            "two words@example.com",
+            f"{'a' * 256}@example.com",
+        ]
+
+        for email in invalid_emails:
+            with self.subTest(email=email):
+                response = self.client.post(
+                    f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+                    json={"email": email},
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.get_json(), {"error": "Enter a valid email address"})
+
+        with self.app.app_context():
+            self.assertEqual(Claim.query.filter_by(gift_id=self.gift_id).count(), 1)
+
+    def test_public_claim_email_is_normalized_and_matched_case_insensitively(self):
+        with self.app.app_context():
+            gift = db.session.get(Gift, self.gift_id)
+            gift.quantity = None
+            for claim in list(gift.claims):
+                db.session.delete(claim)
+            db.session.commit()
+
+        claim_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/claim",
+            json={"email": "  Mixed.Case@Example.COM  "},
+        )
+        self.assertEqual(claim_response.status_code, 200)
+
+        with self.app.app_context():
+            new_claim = Claim.query.filter_by(claimed_email="mixed.case@example.com").one()
+
+        verify_response = self.client.post(
+            f"/api/public/{self.owner_share_token}/items/{self.gift_id}/verify-claim",
+            json={"email": "MIXED.CASE@EXAMPLE.COM"},
+        )
+        self.assertEqual(verify_response.status_code, 200)
+        self.assertEqual(verify_response.get_json(), {"claim_token": new_claim.claim_token})
 
 
 class ClaimManagementMigrationTestCase(unittest.TestCase):

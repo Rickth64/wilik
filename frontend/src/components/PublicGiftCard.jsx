@@ -19,7 +19,7 @@ function PublicGiftCard({ gift, currency, decimalSeparator, showBackgroundPatter
   if (fullyClaimed) classNames.push('gift-card--fully-claimed')
   if (showBackgroundPattern) classNames.push('gift-card--pattern')
 
-  // "Claim" and "release a claim by name" are two deliberately distinct actions (even at
+  // "Claim" and "release a claim by email" are two deliberately distinct actions (even at
   // quantity=1, where the single button already does both depending on state) so that a
   // typo while trying to release a claim can never silently create an unwanted extra one.
   let icon, visibleText, tooltip, clickable, handleClick

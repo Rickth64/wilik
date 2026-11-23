@@ -1,10 +1,20 @@
 import secrets
+import re
 
 from flask import Blueprint, jsonify, request
 
 from models import AppSettings, Claim, Gift, User, db
 
 public_bp = Blueprint("public", __name__, url_prefix="/api")
+
+
+def normalize_claim_email(value):
+    email = (value or "").strip().lower()
+    if not email:
+        return None
+    if len(email) > 255 or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) is None:
+        return None
+    return email
 
 
 @public_bp.route("/public/directory")
@@ -53,18 +63,18 @@ def claim_item(token, item_id):
     if gift.owner_id != user.id:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json()
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "Enter your name"}), 400
+    email = normalize_claim_email(data.get("email"))
+    if email is None:
+        return jsonify({"error": "Enter a valid email address"}), 400
 
     # always creates a new, independent claim -- never tries to recognize an existing
-    # name and reuse it, so a typo while trying to *release* a claim (see verify_claim)
+    # email and reuse it, so a typo while trying to *release* a claim (see verify_claim)
     # can never silently create an unwanted extra claim instead
     claimed_count = len(gift.claims)
     if gift.quantity is not None and claimed_count >= gift.quantity:
         return jsonify({"error": "Already claimed"}), 409
 
-    claim = Claim(gift_id=gift.id, claimed_by=name, claim_token=secrets.token_urlsafe(24))
+    claim = Claim(gift_id=gift.id, claimed_email=email, claim_token=secrets.token_urlsafe(24))
     db.session.add(claim)
     db.session.commit()
     result = gift.to_dict(include_claim_status=True)
@@ -74,7 +84,7 @@ def claim_item(token, item_id):
 
 @public_bp.route("/public/<token>/items/<int:item_id>/verify-claim", methods=["POST"])
 def verify_claim(token, item_id):
-    """Confirms a name matches an existing claim without releasing it -- lets a
+    """Confirms an email matches an existing claim without releasing it -- lets a
     visitor on a different device 'reclaim' their own item before deciding to
     actually unclaim it, instead of that happening in the same step."""
     user = User.query.filter_by(share_token=token).first()
@@ -84,12 +94,14 @@ def verify_claim(token, item_id):
     if gift.owner_id != user.id:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json()
-    name = data.get("name", "").strip()
+    email = normalize_claim_email(data.get("email"))
+    if email is None:
+        return jsonify({"error": "Enter a valid email address"}), 400
     claim = Claim.query.filter(
-        Claim.gift_id == gift.id, db.func.lower(Claim.claimed_by) == name.lower()
+        Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
     ).first()
     if claim is None:
-        return jsonify({"error": "That name doesn't match this claim"}), 403
+        return jsonify({"error": "That email address doesn't match this claim"}), 403
     return jsonify({"claim_token": claim.claim_token})
 
 
@@ -103,17 +115,17 @@ def unclaim_item(token, item_id):
         return jsonify({"error": "Not found"}), 404
     data = request.get_json()
     claim_token = data.get("claim_token")
-    name = data.get("name", "").strip()
+    email = normalize_claim_email(data.get("email"))
 
     claim = None
     if claim_token:
         claim = Claim.query.filter_by(gift_id=gift.id, claim_token=claim_token).first()
-    if claim is None and name:
+    if claim is None and email:
         claim = Claim.query.filter(
-            Claim.gift_id == gift.id, db.func.lower(Claim.claimed_by) == name.lower()
+            Claim.gift_id == gift.id, db.func.lower(Claim.claimed_email) == email
         ).first()
     if claim is None:
-        return jsonify({"error": "That name doesn't match this claim"}), 403
+        return jsonify({"error": "That email address doesn't match this claim"}), 403
 
     db.session.delete(claim)
     db.session.commit()

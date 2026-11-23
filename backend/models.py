@@ -199,7 +199,7 @@ class Claim(db.Model):
     gift_id = db.Column(db.Integer, db.ForeignKey("gift.id"), nullable=False)
     # never sent to public visitors. It is returned to an authenticated item owner only
     # after they explicitly reveal it and their wishlist has enabled claim management.
-    claimed_by = db.Column(db.String(100), nullable=False)
-    # secret handed to the claimer's own browser so they can unclaim silently, without retyping their name
+    claimed_email = db.Column(db.String(255), nullable=False)
+    # secret handed to the claimer's own browser so they can unclaim silently, without retyping their email
     claim_token = db.Column(db.String(64), nullable=False, unique=True)
     purchased = db.Column(db.Boolean, nullable=False, default=False)

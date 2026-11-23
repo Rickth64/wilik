@@ -126,7 +126,7 @@ function GiftCard({
         if (!response.ok) return response.json().then((data) => Promise.reject(new Error(t(data.error))))
         return response.json()
       })
-      .then((data) => setClaimants(data.claimed_by))
+      .then((data) => setClaimants(data.claimed_emails))
       .catch((error) => setClaimError(error.message || t('Could not reveal claimants')))
       .finally(() => setClaimActionPending(false))
   }
@@ -139,7 +139,7 @@ function GiftCard({
         if (!response.ok) return response.json().then((data) => Promise.reject(new Error(t(data.error))))
         return response.json()
       })
-      .then((data) => setDeleteClaimants(data.claimed_by))
+      .then((data) => setDeleteClaimants(data.claimed_emails))
       .catch((error) => setDeleteClaimError(error.message || t('Could not reveal claimants')))
       .finally(() => setDeleteRevealPending(false))
   }
@@ -289,15 +289,15 @@ function GiftCard({
         </p>
         {(gift.claimed_count ?? 0) > 0 && claimants === null && (
           <p className="claim-manager__hint">
-            {t('Names stay hidden until you choose to reveal\u00A0them')}
+            {t('Email addresses stay hidden until you choose to reveal\u00A0them')}
           </p>
         )}
         {claimants !== null && (
           <div className="claim-manager__names">
             <strong>{t('Claimed by')}</strong>
             <ul>
-              {claimants.map((name, index) => (
-                <li key={`${name}-${index}`}>{name}</li>
+              {claimants.map((email, index) => (
+                <li key={`${email}-${index}`}>{email}</li>
               ))}
             </ul>
           </div>

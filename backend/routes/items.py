@@ -139,7 +139,7 @@ def delete_item(item_id):
 @items_bp.route("/items/<int:item_id>/claim-info", methods=["GET"])
 @login_required
 def item_claim_info(item_id):
-    # Count-only preflight for destructive owner actions. Keeping names out of
+    # Count-only preflight for destructive owner actions. Keeping email addresses out of
     # this response prevents it from bypassing the wishlist's reveal opt-in.
     gift = db.get_or_404(Gift, item_id)
     if gift.owner_id != current_user.id:
@@ -152,7 +152,7 @@ def item_claim_info(item_id):
 def item_claims(item_id):
     # unlike the passive surface gated by claim_management_active() (the lock icon,
     # claimed_count in the item list, resetting), an owner can always deliberately
-    # reveal a name one at a time -- e.g. right before deleting a claimed item -- no
+    # reveal an email address one at a time -- e.g. right before deleting a claimed item -- no
     # matter the claim management settings. Before this feature existed, deleting a
     # claimed item always showed who claimed it with no opt-in at all; this keeps
     # that capability available, just requiring an explicit click instead of showing
@@ -160,7 +160,7 @@ def item_claims(item_id):
     gift = db.get_or_404(Gift, item_id)
     if gift.owner_id != current_user.id:
         return jsonify({"error": "Not your item"}), 403
-    return jsonify({"claimed_by": [claim.claimed_by for claim in gift.claims]})
+    return jsonify({"claimed_emails": [claim.claimed_email for claim in gift.claims]})
 
 
 @items_bp.route("/items/<int:item_id>/claims", methods=["DELETE"])
