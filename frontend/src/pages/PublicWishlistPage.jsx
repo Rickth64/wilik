@@ -190,14 +190,8 @@ function PublicWishlistPage({ appName }) {
   }
 
   function openClaimDialog(gift, action, options = {}) {
-    const maxQuantity =
-      action === 'unclaim'
-        ? options.maxQuantity
-        : action === 'claim' && gift.quantity != null
-          ? gift.quantity - (gift.claimed_count ?? 0)
-          : undefined
     setClaimEmail('')
-    setClaimAmount(maxQuantity === 1 ? '1' : '')
+    setClaimAmount('1')
     setClaimDialogError(null)
     setClaimDialogPending(false)
     setClaimDialog({ gift, action, ...options })
@@ -357,6 +351,9 @@ function PublicWishlistPage({ appName }) {
         : undefined
   const showClaimQuantity =
     claimDialog && claimDialog.action !== 'verify' && claimDialogMaxQuantity !== 1
+  const showClaimQuantityButtons =
+    showClaimQuantity && claimDialogMaxQuantity != null && claimDialogMaxQuantity > 1 && claimDialogMaxQuantity <= 10
+  const showClaimQuantityInput = showClaimQuantity && !showClaimQuantityButtons
 
   return (
     <div className="app" style={themeStyle(owner.theme_color)}>
@@ -501,19 +498,48 @@ function PublicWishlistPage({ appName }) {
                 </label>
               )}
               {showClaimQuantity && (
-                <label>
-                  {t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}
-                  <input
-                    type="number"
-                    name="quantity"
-                    min="1"
-                    max={claimDialogMaxQuantity}
-                    step="1"
-                    required
-                    value={claimAmount}
-                    onChange={(event) => setClaimAmount(event.target.value)}
-                  />
-                </label>
+                <div className="claim-email-modal__quantity">
+                  <span>{t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}</span>
+                  {showClaimQuantityButtons ? (
+                    <div
+                      className="claim-email-modal__quantity-options"
+                      role="group"
+                      aria-label={t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}
+                    >
+                      {Array.from({ length: Math.min(10, claimDialogMaxQuantity) }, (_, index) => index + 1).map(
+                        (quantity) => (
+                          <button
+                            key={quantity}
+                            type="button"
+                            className={
+                              Number(claimAmount) === quantity
+                                ? 'claim-email-modal__quantity-option claim-email-modal__quantity-option--active'
+                                : 'claim-email-modal__quantity-option'
+                            }
+                            aria-pressed={Number(claimAmount) === quantity}
+                            onClick={() => setClaimAmount(String(quantity))}
+                          >
+                            {quantity}
+                          </button>
+                        )
+                      )}
+                    </div>
+                  ) : (
+                    showClaimQuantityInput && (
+                      <input
+                        type="number"
+                        name="quantity"
+                        aria-label={t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}
+                        min="1"
+                        max={claimDialogMaxQuantity}
+                        step="1"
+                        required
+                        value={claimAmount}
+                        onChange={(event) => setClaimAmount(event.target.value)}
+                      />
+                    )
+                  )}
+                </div>
               )}
               {claimDialogError && <p className="form-error">{claimDialogError}</p>}
               <div className="gift-form__actions">

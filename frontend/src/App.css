@@ -707,6 +707,36 @@
   font: inherit;
 }
 
+.claim-email-modal__quantity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.claim-email-modal__quantity-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.claim-email-modal__quantity-option {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 34px;
+  padding: 0;
+}
+
+.claim-email-modal__quantity-option--active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
 .claim-manager {
   width: min(440px, 100%);
   padding: 20px;
