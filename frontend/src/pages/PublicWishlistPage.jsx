@@ -190,8 +190,14 @@ function PublicWishlistPage({ appName }) {
   }
 
   function openClaimDialog(gift, action, options = {}) {
+    const maxQuantity =
+      action === 'unclaim'
+        ? options.maxQuantity
+        : action === 'claim' && gift.quantity != null
+          ? gift.quantity - (gift.claimed_count ?? 0)
+          : undefined
     setClaimEmail('')
-    setClaimAmount('')
+    setClaimAmount(maxQuantity === 1 ? '1' : '')
     setClaimDialogError(null)
     setClaimDialogPending(false)
     setClaimDialog({ gift, action, ...options })
@@ -343,6 +349,14 @@ function PublicWishlistPage({ appName }) {
     .filter((item) => brandFilters.length === 0 || brandFilters.includes(item.brand))
 
   const sorted = sortBy === 'price' ? sortGiftsByPrice(filtered) : sortGifts(filtered)
+  const claimDialogMaxQuantity =
+    claimDialog?.action === 'unclaim'
+      ? claimDialog.maxQuantity
+      : claimDialog?.action === 'claim' && claimDialog.gift.quantity != null
+        ? Math.max(0, claimDialog.gift.quantity - (claimDialog.gift.claimed_count ?? 0))
+        : undefined
+  const showClaimQuantity =
+    claimDialog && claimDialog.action !== 'verify' && claimDialogMaxQuantity !== 1
 
   return (
     <div className="app" style={themeStyle(owner.theme_color)}>
@@ -486,20 +500,14 @@ function PublicWishlistPage({ appName }) {
                   />
                 </label>
               )}
-              {claimDialog.action !== 'verify' && (
+              {showClaimQuantity && (
                 <label>
                   {t(claimDialog.action === 'claim' ? 'Copies to claim' : 'Copies to release')}
                   <input
                     type="number"
                     name="quantity"
                     min="1"
-                    max={
-                      claimDialog.action === 'unclaim'
-                        ? claimDialog.maxQuantity
-                        : claimDialog.gift.quantity == null
-                          ? undefined
-                          : Math.max(1, claimDialog.gift.quantity - (claimDialog.gift.claimed_count ?? 0))
-                    }
+                    max={claimDialogMaxQuantity}
                     step="1"
                     required
                     value={claimAmount}
